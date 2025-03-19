@@ -43,6 +43,7 @@ SVGuidedMPPI::SVGuidedMPPI(const Params::Common& common_params, const Params::SV
     const size_t sample_num_for_cache = std::max(std::max(sample_batch_num, sample_num_for_grad_estimation), guide_sample_num);
     mpc_base_ptr_ = std::make_unique<MPCBase>(common_params, sample_num_for_cache);
     
+    // 현재 컨트롤 입력 1차원 가정
     const double max_Vx = common_params.max_Vx;
     const double min_Vx = common_params.min_Vx;
     // const double max_Vy = common_params.max_Vy;
@@ -69,8 +70,8 @@ SVGuidedMPPI::SVGuidedMPPI(const Params::Common& common_params, const Params::SV
     }
     
     // optimal action distribution 선언 (나중에 수정할 수 있도록 해야함, 현재 0과 identity로 선언함 N(0, I))
-    // optimal_mu_ = Eigen::VectorXd::Zero(CONTROL_SPACE::dim);
-    optimal_mu_ = Eigen::VectorXd::Constant(CONTROL_SPACE::dim, 1.0);
+    // optimal_mu_ = Eigen::VectorXd::Zero(CONTROL_SPACE::dim); // mean = 0
+    optimal_mu_ = Eigen::VectorXd::Constant(CONTROL_SPACE::dim, 2.0); // mean 값 조정 부분
     optimal_Sigma_ = Eigen::MatrixXd::Identity(CONTROL_SPACE::dim, CONTROL_SPACE::dim);
     inv_optimal_Sigma_ = optimal_Sigma_.inverse();
 }
@@ -109,7 +110,8 @@ std::pair<ControlSeq, double> SVGuidedMPPI::solve(const State& initial_state) {
     static int iter_count = 0;
     static int iteration_count = 0;
 
-// base cost만 반환하도록 수정한 func_calc_costs
+// 아래 3가지 func_calc_costs 함수 중 하나 선택하여 사용
+// 가우시안 분포 사용
 auto func_calc_costs = [this](const PriorSamplesWithCosts& sampler) -> std::vector<double> {
     std::vector<double> costs(sampler.get_num_samples(), 0.0);
     for (size_t i = 0; i < sampler.get_num_samples(); i++) {
@@ -126,9 +128,7 @@ auto func_calc_costs = [this](const PriorSamplesWithCosts& sampler) -> std::vect
     return costs;
 };
 
-// 예: SVGuidedMPPI::solve() 내 (혹은 비슷한 위치)에서 람다 함수를 정의
-// a, b, c를 외부에서 세팅할 수 있도록 인자를 받아 캡처하거나, SVGuidedMPPI 클래스 멤버로 두고 캡처해도 좋습니다.
-// 여기서는 예시로 double a_, b_, c_를 멤버에 두었다고 가정합니다.
+// 간단한 2차 함수 사용 (파라미터 mppi_controller.yaml 참고)
 // auto func_calc_costs = [this](const PriorSamplesWithCosts& sampler) -> std::vector<double> 
 // {
 //     // 결과를 담을 벡터
@@ -174,9 +174,7 @@ auto func_calc_costs = [this](const PriorSamplesWithCosts& sampler) -> std::vect
 // };
 
 
-// SVGuidedMPPI::solve() 함수 내에서, 혹은 유사한 위치에서 func_calc_costs 람다 정의
-// a_, p_, c_ 등을 SVGuidedMPPI 클래스 멤버로 두거나, capture로 넘겨줄 수도 있습니다.
-// 여기선 예시로 "a_, p_, c_"가 이미 멤버 변수로 존재한다고 가정.
+// 간단한 4차 함수 사용 (파라미터 mppi_controller.yaml 참고)
 // auto func_calc_costs = [this](const PriorSamplesWithCosts& sampler) -> std::vector<double> {
 //     std::vector<double> costs(sampler.get_num_samples(), 0.0);
 
@@ -236,6 +234,7 @@ auto func_calc_costs = [this](const PriorSamplesWithCosts& sampler) -> std::vect
             g_cost_log_file << iteration_count << "," << s << "," << costs[s] << "\n";
         }
         iteration_count++;
+
         costs_history.insert(costs_history.end(), costs.begin(), costs.end());
         control_seq_history.insert(control_seq_history.end(), guide_samples_ptr_->noised_control_seq_samples_.begin(),
                                     guide_samples_ptr_->noised_control_seq_samples_.end());
@@ -273,12 +272,7 @@ auto func_calc_costs = [this](const PriorSamplesWithCosts& sampler) -> std::vect
         }
     }
     iter_count++;
-    // for (size_t row = 0; row < (prediction_step_size_ - 1); row++) {
-    //     for (size_t col = 0; col < CONTROL_SPACE::dim; col++) {
-    //         double val = best_particle(row, col);
-    //         g_best_particle_log << iter_count << "," << row << "," << col << "," << val << "\n";
-    //     }
-    // }
+
     for (size_t t = 0; t < (prediction_step_size_ - 1); t++) {
         for (size_t dim = 0; dim < CONTROL_SPACE::dim; dim++) {
             double cov_val = covs[t](dim, dim);
@@ -304,12 +298,16 @@ auto func_calc_costs = [this](const PriorSamplesWithCosts& sampler) -> std::vect
     const double collision_rate = 0.0; // optimal 분포 기반이므로 collision 비용은 고려하지 않음.
     prev_control_seq_ = updated_control_seq;
 
+    // solve마다 가우시안 평균값 조정(이동), 현재는 디버깅 중이니 사용 안함
     // optimal_mu_ += Eigen::VectorXd::Constant(CONTROL_SPACE::dim, optimal_offset_step_);
     // b_ += optimal_offset_step_;
+    
+    // 새로 샘플링하는 부분
     // for debug
     // {
     //     guide_samples_ptr_->random_sampling(nominal_control_seq_, covs);
     // }
+
     return std::make_pair(updated_control_seq, collision_rate);
 }
 
@@ -324,7 +322,6 @@ ControlSeq SVGuidedMPPI::approx_grad_log_likelihood(const ControlSeq& mean_seq,
                                                       int iteration_count) const {
     const ControlSeqCovMatrices grad_cov = sampler->get_constant_control_seq_cov_matrices({Vx_cov_for_grad_estimation_});
     sampler->random_sampling(noised_seq, grad_cov);
-    // cost는 combined cost (optimal NLL + penalty)로 계산됨
     sampler->costs_ = calc_costs(*sampler);
     std::vector<double> exp_costs(sampler->get_num_samples());
     ControlSeq sum_of_grads = mean_seq * 0.0;
@@ -333,7 +330,8 @@ ControlSeq SVGuidedMPPI::approx_grad_log_likelihood(const ControlSeq& mean_seq,
 #pragma omp parallel for num_threads(thread_num_)
     for (size_t i = 0; i < sampler->get_num_samples(); i++) {
         double cost_with_control_term = sampler->costs_[i];
-        // penalty 항을 다시 추가하여
+        
+        // Control penalty 항 추가
         // for (size_t j = 0; j < prediction_step_size_ - 1; j++) {
         //     const double diff_control_term = grad_lambda_ * (prev_control_seq_.row(j) - sampler->noised_control_seq_samples_[i].row(j))
         //                                      * inv_covs[j] *
@@ -386,7 +384,7 @@ ControlSeq SVGuidedMPPI::approx_grad_log_likelihood(const ControlSeq& mean_seq,
 
 ControlSeqBatch SVGuidedMPPI::approx_grad_posterior_batch(
     const PriorSamplesWithCosts& samples,
-    const std::function<std::vector<double>(const PriorSamplesWithCosts&)>& calc_costs_placeholder) const {
+    const std::function<std::vector<double>(const PriorSamplesWithCosts&)>& calc_costs) const {
     
     // --- [Modified] 로그 파일 추가: 각 샘플의 gradient 저장 (svgd_gradient_log.csv) ---
     static std::ofstream g_gradient_log_file;
@@ -400,10 +398,12 @@ ControlSeqBatch SVGuidedMPPI::approx_grad_posterior_batch(
     
     ControlSeqBatch grad_log_likelihoods = samples.get_zero_control_seq_batch();
     const ControlSeq mean = samples.get_mean();
+
     for (size_t i = 0; i < samples.get_num_samples(); i++) {
         const ControlSeq grad_log_likelihood = approx_grad_log_likelihood(
-            mean, samples.noised_control_seq_samples_[i], samples.get_inv_cov_matrices(), calc_costs_placeholder, grad_sampler_ptrs_.at(i).get(), i, iteration_count);
+            mean, samples.noised_control_seq_samples_[i], samples.get_inv_cov_matrices(), calc_costs, grad_sampler_ptrs_.at(i).get(), i, iteration_count);
         grad_log_likelihoods[i] = grad_log_likelihood;
+        
         // [Modified] 각 샘플의 gradient를 CSV에 저장
         for (size_t row = 0; row < grad_log_likelihood.rows(); row++) {
             for (size_t col = 0; col < grad_log_likelihood.cols(); col++) {
@@ -492,8 +492,7 @@ std::pair<double, double> SVGuidedMPPI::gaussian_fitting(const std::vector<doubl
     return std::make_pair(mean, variance);
 }
 
-// --- 다음 함수들은 MPCTemplate 인터페이스 준수를 위한 스텁 구현입니다. ---
-// 환경 기반 cost 계산이나 상태 예측을 사용하지 않으므로 기본 동작만 제공합니다.
+// --- 다음 함수들은 MPCTemplate 인터페이스 준수를 위한 스텁 구현 ---
 
 void SVGuidedMPPI::set_obstacle_map(const grid_map::GridMap& obstacle_map) {
     // optimal action distribution 기반에서는 사용하지 않음.

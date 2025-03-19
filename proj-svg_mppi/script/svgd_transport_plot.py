@@ -233,7 +233,7 @@ time_step_target = 0
 dim_target = 0
 
 # Optimal Action Distribution (Gaussian) 파라미터 설정
-initial_mu_opt = 1.0       # 초기 평균
+initial_mu_opt = 2.0       # 초기 평균
 sigma_opt = 1.0            # 표준편차
 optimal_offset_step = 0.0  # best_iter_interval마다 분포 평균이 이동하는 양
 

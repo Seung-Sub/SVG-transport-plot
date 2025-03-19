@@ -76,8 +76,8 @@ void MPPIControllerROS::timer_callback([[maybe_unused]] const ros::TimerEvent& t
     // twist 메시지 생성: updated_control_seq의 첫 행 사용
     geometry_msgs::Twist twist_cmd;
     twist_cmd.linear.x  = updated_control_seq(0, CONTROL_SPACE::Vx);
-    // twist_cmd.linear.y  = updated_control_seq(0, CONTROL_SPACE::Vy);
-    // twist_cmd.angular.z = updated_control_seq(0, CONTROL_SPACE::Wz);
+    // // twist_cmd.linear.y  = updated_control_seq(0, CONTROL_SPACE::Vy);
+    // // twist_cmd.angular.z = updated_control_seq(0, CONTROL_SPACE::Wz);
     pub_twist_cmd_.publish(twist_cmd);
 
     ROS_INFO_THROTTLE(2.0, "[MPPIControllerROS] Twist published: (Vx=%.2f)",
